@@ -1,0 +1,326 @@
+type Keeps {
+  created_at: DateTime
+  id: ID!
+  is_link: Boolean
+  keep_type: String
+  link: [Link] @materializer(query: "getLinkUsingKeep_id")
+  note: String
+  sort_no: ID
+  user_id: ID
+}
+
+type Response {
+  message: String
+}
+
+type Link {
+  created_at: DateTime
+  description: String
+  id: ID!
+  image: String
+  keep_id: ID
+  keeps: Keeps
+    @materializer(
+      query: "getKeeps"
+      arguments: [{ name: "id", field: "keep_id" }]
+    )
+  target_url: String
+  title: String
+}
+
+type User {
+  created_at: DateTime
+  email: String
+  id: ID!
+  keepsList: [Keeps] @materializer(query: "getUserKeeps")
+  name: String
+  password: String
+}
+
+"""
+These are some examples of queries generated from the schema. Feel free to modify them or add your own.
+"""
+type Query {
+  getKeeps(id: ID!): Keeps
+    @dbquery(
+      type: "postgresql"
+      schema: "public"
+      table: "Keeps"
+      configuration: "postgresql_config"
+    )
+  getLinkUsingKeep_id(id: ID!): [Link]
+    @dbquery(
+      type: "postgresql"
+      query: """
+      SELECT T."created_at", T."description", T."id", T."image", T."keep_id", T."target_url", T."title"
+        FROM "public"."Link" T
+        WHERE T."keep_id" = $1
+      """
+      configuration: "postgresql_config"
+    )
+  getLinkList: [Link]
+    @dbquery(
+      type: "postgresql"
+      schema: "public"
+      table: "Link"
+      configuration: "postgresql_config"
+    )
+  getUserKeeps(id: ID): [Keeps]
+    @dbquery(
+      type: "postgresql"
+      query: """
+      SELECT T."created_at", T."id", T."is_link", T."keep_type", T."note", T."sort_no", T."user_id"
+        FROM "public"."Keeps" T
+        WHERE T."user_id" = $1
+        ORDER BY T."sort_no" ASC;
+      """
+      configuration: "postgresql_config"
+    )
+  getKeepsByType(id: ID!, keep_type: String!): [Keeps]
+    @dbquery(
+      type: "postgresql"
+      query: """
+      SELECT T."created_at", T."id", T."is_link", T."keep_type", T."note", T."sort_no", T."user_id"
+        FROM "public"."Keeps" T
+        WHERE T."user_id" = $1
+        AND T."keep_type" = $2
+        ORDER BY T."sort_no" ASC;
+      """
+      configuration: "postgresql_config"
+    )
+}
+
+"""
+These are some examples of mutations generated from the schema. Feel free to modify them or add your own.
+"""
+type Mutation {
+  insertKeeps(note: String!, user_id: ID!): Keeps
+    @dbquery(
+      type: "postgresql"
+      schema: "public"
+      query: """
+      INSERT INTO "public"."Keeps" ("note", "user_id", "sort_no") VALUES ($1, $2,
+      (SELECT COALESCE(MAX("sort_no"), 0) + 1 FROM "public"."Keeps" WHERE "user_id" = $2 AND "keep_type" = 'inbox'));
+      """
+      configuration: "postgresql_config"
+    )
+  deleteKeeps(user_id: ID!, id: ID!, keep_type: String!): Response
+    @dbquery(
+      type: "postgresql"
+      schema: "public"
+      query: """
+      WITH updated_keeps AS (
+        UPDATE "public"."Keeps"
+        SET "sort_no" = "sort_no" - 1
+        WHERE "user_id" = $1 AND "sort_no" > (SELECT "sort_no" FROM "public"."Keeps" WHERE "id" = $2 AND "keep_type" = $3)
+        AND "keep_type" = $3
+        RETURNING "id", "sort_no"
+      ), link AS (
+        DELETE FROM "public"."Link"
+        WHERE "keep_id" = $2
+        RETURNING *
+      ),
+       keeps AS (
+         DELETE FROM "public"."Keeps"
+         WHERE "id" = $2
+         AND "user_id" = $1
+         RETURNING *
+       )
+       SELECT message FROM (
+         VALUES('Successfully deleted Keeps')
+       ) AS T(message)
+      """
+      configuration: "postgresql_config"
+    )
+  insertLink(
+    image: String!
+    created_at: DateTime!
+    id: ID!
+    keep_id: ID!
+    description: String!
+    target_url: String!
+    title: String!
+  ): Link
+    @dbquery(
+      type: "postgresql"
+      schema: "public"
+      table: "Link"
+      dml: INSERT
+      configuration: "postgresql_config"
+    )
+  deleteLink(id: ID!): Link
+    @dbquery(
+      type: "postgresql"
+      schema: "public"
+      table: "Link"
+      dml: DELETE
+      configuration: "postgresql_config"
+    )
+
+  insertKeepsWithLink(
+    is_link: Boolean!
+    user_id: ID!
+    image: String
+    description: String
+    target_url: String!
+    title: String!
+  ): Response
+    @dbquery(
+      type: "postgresql"
+      schema: "public"
+      query: """
+      WITH
+        inserted_keeps AS (
+          INSERT INTO "public"."Keeps" (
+            "is_link",
+            "user_id",
+            "sort_no"
+          )
+          VALUES (
+            $1,
+            $2,
+            (SELECT COALESCE(MAX("sort_no"), 0) + 1 FROM "public"."Keeps" WHERE "user_id" = $2 AND "keep_type" = 'inbox')
+          )
+          RETURNING *
+        ),
+        inserted_link AS (
+          INSERT INTO "public"."Link" (
+            "image",
+            "description",
+            "target_url",
+            "title",
+            "keep_id"
+          )
+          VALUES (
+            $3,
+            $4,
+            $5,
+            $6,
+            (SELECT id FROM inserted_keeps)
+          )
+          RETURNING *
+        )
+              SELECT message FROM (
+          VALUES('Successfully created Keeps')
+        ) AS T(message)
+      """
+      configuration: "postgresql_config"
+    )
+
+  updateKeeps(id: ID!, note: String!): Response
+    @dbquery(
+      type: "postgresql"
+      schema: "public"
+      query: """
+      WITH updated_keeps AS (
+        UPDATE "public"."Keeps"
+        SET "note" = $2
+        WHERE "id" = $1
+        RETURNING *
+      )
+      SELECT message FROM (
+          VALUES('Successfully updated Keeps')
+        ) AS T(message)
+      """
+      configuration: "postgresql_config"
+    )
+
+  updateSortWhenDown(
+    oldPosition: Int!
+    newPosition: Int!
+    keep_id: ID!
+    user_id: ID!
+    keep_type: String!
+  ): Response
+    @dbquery(
+      type: "postgresql"
+      schema: "public"
+      query: """
+      WITH
+        updated_keeps AS (
+          UPDATE "public"."Keeps"
+            SET "sort_no" = "sort_no" - 1
+            WHERE "sort_no" <= $2
+            AND "sort_no" > $1
+            AND "user_id" = $4
+            AND "keep_type" = $5
+            AND "id" <> $3
+          RETURNING *
+        ), updated_keeps_2 AS (
+          UPDATE "public"."Keeps"
+            SET "sort_no" = $2
+            WHERE "id" = $3
+            RETURNING *
+        )
+        SELECT message FROM (
+          VALUES('Successfully updated Keeps')
+        ) AS T(message)
+      """
+      configuration: "postgresql_config"
+    )
+
+  updateSortWhenUp(
+    oldPosition: Int!
+    newPosition: Int!
+    keep_id: ID!
+    user_id: ID!
+    keep_type: String!
+  ): Response
+    @dbquery(
+      type: "postgresql"
+      schema: "public"
+      query: """
+      WITH
+        updated_keeps AS (
+          UPDATE "public"."Keeps"
+            SET "sort_no" = "sort_no" + 1
+            WHERE "sort_no" >= $2
+            AND "sort_no" < $1
+            AND "user_id" = $4
+            AND "keep_type" = $5
+            AND "id" <> $3
+          RETURNING *
+        ), updated_keeps_2 AS (
+          UPDATE "public"."Keeps"
+            SET "sort_no" = $2
+            WHERE "id" = $3
+            RETURNING *
+        )
+        SELECT message FROM (
+          VALUES('Successfully updated Keeps')
+        ) AS T(message)
+      """
+      configuration: "postgresql_config"
+    )
+
+  moveKeeps(
+    keep_id: ID!
+    user_id: ID!
+    current_keep_type: String!
+    new_keep_type: String!
+  ): Response
+    @dbquery(
+      type: "postgresql"
+      schema: "public"
+      query: """
+      WITH
+      update_current_keeps_position AS (
+      UPDATE "public"."Keeps"
+        SET "sort_no" = "sort_no" - 1
+        WHERE "user_id" = $2 AND "sort_no" > (SELECT "sort_no" FROM "public"."Keeps" WHERE "id" = $1 AND "keep_type" = $3)
+        AND "keep_type" = $3
+        RETURNING *
+      ), update_new_keeps_position AS (
+       UPDATE "public"."Keeps"
+       SET "sort_no" = (SELECT COALESCE(MAX("sort_no"), 0) + 1 FROM "public"."Keeps" WHERE "user_id" = $2 AND "keep_type" = $4)
+       , "keep_type" = $4
+       WHERE "id" = $1
+      )
+
+      SELECT message FROM (
+        VALUES('Successfully moved Keeps')
+      ) AS T(message)
+      """
+      configuration: "postgresql_config"
+    )
+}
